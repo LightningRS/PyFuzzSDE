@@ -1,3 +1,6 @@
 __pycache__
 .vscode
-.local_test
+local_test/
+output*/
+.coverage
+*.log

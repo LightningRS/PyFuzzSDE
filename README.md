@@ -13,5 +13,5 @@ A Sensitive Data Extractor tool for Fuzzing test on Python program
 ## 用法 / Usage
 
 
-## 更新日志 / Updatelog
-详见 [更新日志](UPDATELOG.md)
+## 更新日志 / Changelog
+详见 [PyFuzzSDE 更新日志](CHANGELOG.md)
