@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 # @Project: PyFuzzSDE
 # @File:    pyfuzzsde/runner.py
-# @Time:    2021/04/13 15:00:00
-# @Version: 0.0.2
+# @Time:    2021/04/21 03:00:00
+# @Version: 0.0.3
 # @Author:  LightningRS
 # @Email:   me@ldby.site
 # @Desc:    PyFuzzSDE Runner
 # @Changelog:
+#    2021/04/21: 完成动态分析第一版，修复 BUG
 #    2021/04/21: 完成动态分析的部分前置工作
 #    2021/04/13: Create project
 
@@ -45,6 +46,8 @@ class SDERunner(object):
         self.curr_code = None
         self.curr_ast = None
         self.curr_sde_visitor = None
+
+        self.curr_watch_vars = set()
 
         self.namespace = dict()
 
@@ -174,37 +177,82 @@ class SDERunner(object):
         # 根据 event 类型分发处理
         if event == 'line':
             return self.dispatch_line(frame)
+        
+        if event == 'return' or event == 'call':
+            # 函数调用和返回时清空监视变量
+            self.curr_watch_vars.clear()
 
         return self.trace_dispatch
     
-    @staticmethod
-    def get_full_func_name(frame: FrameType):
-        func_name = frame.f_code.co_name
-        loc = frame.f_locals
-        if 'self' in loc:
-            # 对于类方法，通过 self 获取完整类名
-            self_obj = loc['self']
-            class_name: str = re.findall(r"^<class='(.*)'>$", str(self_obj.__class__))[0]
-            module_name: str = str(self_obj.__module__)
-            func_name = '{}.{}'.format(class_name.replace('{}.'.format(module_name), ''), func_name)
+    def get_path_name_by_node(self, flag: list, node: ast.AST):
+        """根据 AST 结点生成完整函数路径名称
+
+        对于不属于函数的结点，返回空文本
+        :param flag: 辅助标记，用于确认末端是否为函数结点
+        :param node: 分析起始 AST 结点
+        """
+        if isinstance(node, (ast.Module, ast.Name)):
+            return ''
+
+        parent_node = self.curr_sde_visitor.parent_table[node]
+        
+        if isinstance(parent_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            has_dot = flag[0]
+            if not flag[0]:
+                flag[0] = True
+            res = '{}{}{}'.format(self.get_path_name_by_node(flag, parent_node), parent_node.name, '.' if has_dot else '')
+            return res
+        
+        if isinstance(parent_node, ast.ClassDef):
+            if flag[0] is False:
+                return ''
+            return '{}{}.'.format(self.get_path_name_by_node(flag, parent_node), parent_node.name)
+        
+        return self.get_path_name_by_node(flag, parent_node)
+
+    def get_curr_func_name(self):
+        line_node = self.curr_ast.line_node[self.curr_lineno]
+        func_name = self.get_path_name_by_node([False], line_node)
         return func_name
 
     def dispatch_line(self, frame: FrameType):
         """代码行跟踪处理
 
         """
-
-        # 获取当前完整函数名称
-        # 若存在 self，则表明是类方法
-        if frame.f_back:
-            logger.debug("FUCK!!!!!: {}".format(frame.f_back.f_code.co_name))
-        logger.debug("test: {}, {}".format(frame.f_globals.get('__file__'), self.get_full_func_name(frame)))
         logger.debug('{}:{}\t{}\t{}'.format(
             os.path.basename(self.curr_filename),
             frame.f_lineno,
             self.curr_ast.line_node[frame.f_lineno] if len(self.curr_ast.line_node) > 0 else '',
             self.curr_code[frame.f_lineno-1])
         )
+
+        # 监视变量值
+        for var_name in self.curr_watch_vars:
+            name_split = var_name.split('.')
+            try:
+                obj = frame.f_locals[name_split[0]]
+                val = eval("obj.{}".format('.'.join(name_split[1:]))) if len(name_split) > 1 else obj
+                if isinstance(val, str) and val not in self.data_pool and val not in self.used_data_pool:
+                    logger.info("New str DETECTED during running: ({}:{}) {} = {}".format(
+                        self.curr_filename, self.curr_lineno, var_name, val
+                    ))
+                    self.data_pool.append(val)
+            except KeyError:
+                pass
+        
+        # 获取当前完整函数名称
+        func_name = self.get_curr_func_name()
+        if func_name:
+            logger.debug("FULL_FUNC_NAME: {}".format(func_name))
+            var_inputs: dict = self.curr_sde_visitor.analyzed_functions.get(func_name).get('var_input')
+            assert var_inputs is not None
+
+            # 清空监视变量
+            self.curr_watch_vars.clear()
+            for _, vars in var_inputs.items():
+                self.curr_watch_vars.update(vars)
+            logger.debug("NEXT_WATCH_VARS: {}".format(self.curr_watch_vars))
+
         
         return self.trace_dispatch
 
@@ -336,9 +384,11 @@ class SDERunner(object):
         while cnt < times and len(self.data_pool) > 0:
             selected_idx = random.randint(0, len(self.data_pool) - 1)
             selected_ipt = self.data_pool[selected_idx]
-            self.data_pool.pop(selected_idx)
             logger.info("Using input [{}] to run the test program".format(selected_ipt))
             self.run_once(selected_ipt)
+
+            # 先执行，后 pop 掉本次执行使用的数据，避免重复
+            self.data_pool.pop(selected_idx)
             if not self.quitting:
                 self.used_data_pool.append(selected_ipt)
             else:

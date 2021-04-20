@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 # @Project: PyFuzzSDE
 # @File:    pyfuzzsde/ast_visitor.py
-# @Time:    2021/04/21 00:53:00
-# @Version: 0.0.2
+# @Time:    2021/04/21 03:00:00
+# @Version: 0.0.3
 # @Author:  LightningRS
 # @Email:   me@ldby.site
 # @Desc:    PyFuzzSDE AST Analyzer
 # @Changelog:
+#    2021/04/21: 调整数据结构，增加 parent_table，修复 BUG
 #    2021/04/21: 针对赋值语句的复杂目标识别进行优化
 #    2021/04/13: Create project
 
@@ -24,7 +25,7 @@ class LineVisitor(ast.NodeVisitor):
     
     def generic_visit(self, node: ast.AST):
         if hasattr(node, 'lineno'):
-            if node.lineno != self._last_lineno:
+            if node.lineno not in self._line_node:
                 self._last_lineno = node.lineno
                 self._line_node[node.lineno] = node
         return super().generic_visit(node)
@@ -39,9 +40,12 @@ class SDEVisitor(ast.NodeVisitor):
     def __init__(self):
         """SDEVisitor 构造函数
         """
+        # 父结点表
+        self.parent_table = dict()
+        self.parent_ok = False
 
         # 保存所有已分析的函数
-        self.analyzed_functions = list()
+        self.analyzed_functions = dict()
 
         self.curr_class = None          # 当前类名
         self.curr_func = None           # 当前函数名
@@ -60,8 +64,8 @@ class SDEVisitor(ast.NodeVisitor):
         """
 
         str_set = set()
-        for func in self.analyzed_functions:
-            for ipt_name, str_values in func['str_input'].items():
+        for func in self.analyzed_functions.values():
+            for _, str_values in func['str_input'].items():
                 str_set.update(set(str_values))
         return list(str_set)
     
@@ -86,14 +90,32 @@ class SDEVisitor(ast.NodeVisitor):
             # 尚未支持的赋值目标类型 (如 Subscript)
             logger.warning("Unsupported assign target type [{}]".format(target.__class__.__name__))
     
-    def visit(self, node: ast.AST):
+    def visit(self, root: ast.AST):
         """AST 任意类型结点的访问入口
         为所有的结点添加 visited 属性，若已访问过则跳过
         """
 
-        if not hasattr(node, 'visited'):
-            super().visit(node)
-            node.visited = True
+        # 构建父结点表
+        if not self.parent_ok:
+            for node in ast.walk(root):
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.expr_context, ast.boolop, ast.unaryop, ast.cmpop, ast.operator)):
+                        continue
+                    if child not in self.parent_table:
+                        self.parent_table[child] = node
+                    try:
+                        assert self.parent_table[child] == node
+                    except AssertionError:
+                        print("CHILD: {}".format(child))
+                        print("PARENT: {}".format(self.parent_table[child]))
+                        print("NODE: {}".format(node))
+                        raise
+            logger.debug("Build parent table OK")
+            self.parent_ok = True
+
+        if not hasattr(root, 'visited'):
+            super().visit(root)
+            root.visited = True
         
     def visit_ClassDef(self, node: ast.ClassDef):
         """AST ClassDef 类型结点访问入口
@@ -147,12 +169,12 @@ class SDEVisitor(ast.NodeVisitor):
         logger.debug("Current function str_input_map: {}".format(self.str_input_map))
 
         # 记录函数扫描结果
-        self.analyzed_functions.append({
-            "name": self.curr_func,
+        self.analyzed_functions[self.curr_func] = {
+            # "name": self.curr_func,
             "input_names": list(self.var_input_map.keys()),
             "var_input": dict((key, list(val)) for key, val in self.var_input_map.items()),
             "str_input": dict((key, list(val)) for key, val in self.str_input_map.items()),
-        })
+        }
 
     def visit_Assign(self, node: ast.Assign):
         """AST Assign 类型结点访问入口

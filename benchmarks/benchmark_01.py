@@ -2,18 +2,20 @@
 # -*- coding: utf-8 -*-
 # @Project: PyFuzzSDE
 # @File:    pyfuzzsde/benchmarks/benchmark_01.py
-# @Time:    2021/04/21 00:47:00
-# @Version: 0.0.2
+# @Time:    2021/04/21 03:00:00
+# @Version: 0.0.3
 # @Author:  LightningRS
 # @Email:   me@ldby.site
 # @Desc:    PyFuzzSDE Benchmark 01
 # @Changelog:
+#    2021/04/21: 微调用例用于验证动态分析结果
 #    2021/04/21: Create benchmark
 
 FLAGS_COUNT = 11
 
 def benchmark_01(s: str):
-    suffix = s[7:]
+    suffix = s[-7:]
+    print("suffix = {}".format(suffix))
     if s == 'bad':
         raise RuntimeError("Badness")
     if s == 'branch1':
