@@ -1,5 +1,15 @@
 # PyFuzzSDE 更新日志
 
+## V0.0.4: 2021-05-18
+- runner: 调整参数名称，引入黑白名单机制，更好地支持筛选需要跟踪的内部库文件
+- runner: 由于部分情况下 Coverage 库报告耗时过长，因此将 report 语句暂时移出
+- benchmarks: 调整了 benchmarks 的目录结构，以子模块的方式引入被测第三方库
+- benchmarks: 新增了第三方库 sympy 的测试用例 sympy-1
+- ast_visitor: 针对 Python 3.8 以下版本的下标类型 (ast.Index) 进行了部分适配
+- ast_visitor: 调整变量和常量存储结构 (dict -> List\[Dict\])
+- ast_visitor: 针对下标访问实现了获取完整下标访问名称的方法 parse_subscript_name
+- ast_visitor: 将 runner 中的方法 get_path_name_by_node 转移到 ast_visitor 中
+
 ## V0.0.3: 2021-04-21
 - benchmark_01: 微调手写的 benchmark_01，以用于验证动态分析效果
 - ast_visitor: 修复了少数情况下 LineVisitor 中结点与代码行对应关系错误的 BUG

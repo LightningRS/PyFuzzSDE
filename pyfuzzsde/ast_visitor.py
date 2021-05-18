@@ -13,6 +13,8 @@
 #    2021/04/13: Create project
 
 import ast
+import astunparse
+from typing import Dict, List
 from pyfuzzsde import logger
 
 class LineVisitor(ast.NodeVisitor):
@@ -48,9 +50,8 @@ class SDEVisitor(ast.NodeVisitor):
         self.analyzed_functions = dict()
 
         self.curr_class = None          # 当前类名
-        self.curr_func = None           # 当前函数名
-        self.var_input_map = dict()     # 当前函数中与输入参数有关的变量名
-        self.str_input_map = dict()     # 当前函数中与输入参数有关的字符串常量
+        self.var_input_maps: List[Dict] = [dict()]     # 当前函数中与输入参数有关的变量名
+        self.str_input_maps: List[Dict] = [dict()]     # 当前函数中与输入参数有关的字符串常量
 
         # 分析阶段标记
         self.in_compare = False
@@ -70,10 +71,59 @@ class SDEVisitor(ast.NodeVisitor):
         return list(str_set)
     
     @staticmethod
-    def parse_assign_targets(target, assign_targets_ids: list):
+    def parse_subscript_name(root: ast.Subscript):
+        flag = False
+        if not isinstance(root, ast.Subscript):
+            return False
+        
+        parsed_name = ''
+        curr = root
+        while isinstance(curr, ast.Subscript):
+            s = curr.slice
+            if isinstance(s, ast.Subscript):
+                res = SDEVisitor.parse_subscript_name(s)
+                if res is False:
+                    return False
+                parsed_name = '[{}]{}'.format(res, parsed_name)
+            elif isinstance(s, ast.Str):
+                parsed_name = '[{}]{}'.format(s.s, parsed_name)
+            elif isinstance(s, ast.Num):
+                parsed_name = '[{}]{}'.format(s.n, parsed_name)
+            elif isinstance(s, ast.Name):
+                parsed_name = '[{}]{}'.format(s.id, parsed_name)
+            elif isinstance(s, ast.Constant):
+                parsed_name = '[{}]{}'.format(s.value, parsed_name)
+            
+            # Add support for Python < 3.8
+            elif isinstance(s, ast.Index):
+                temp = s.value
+                if isinstance(temp, ast.Str):
+                    parsed_name = '[{}]{}'.format(temp.s, parsed_name)
+                elif isinstance(temp, ast.Num):
+                    parsed_name = '[{}]{}'.format(temp.n, parsed_name)
+                elif isinstance(temp, ast.Name):
+                    parsed_name = '[{}]{}'.format(temp.id, parsed_name)
+                else:
+                    logger.warning("Unsupported Index type: {}".format(s.value.__class__.__name__))
+                    return False
+            # elif isinstance(s, ast.UnaryOp):
+            # TODO: 一元运算（负数下标处理）
+            else:
+                logger.warning("Unsupported slice type: {}".format(s.__class__.__name__))
+                return False
+            curr = curr.value
+        name_lis = list()
+        other = SDEVisitor.parse_local_name(curr, name_lis)
+        if other is False:
+            return False
+        parsed_name = '{}{}'.format(name_lis[0], parsed_name)
+        return parsed_name
+
+    @staticmethod
+    def parse_local_name(target, name_lis: list):
         if hasattr(target, 'id'):
             # 赋值目标为简单变量
-            assign_targets_ids.append(target.id)
+            name_lis.append(target.id)
 
         elif isinstance(target, ast.Attribute):
             # 赋值目标为类对象属性，构建完整的赋值目标名称
@@ -84,12 +134,46 @@ class SDEVisitor(ast.NodeVisitor):
                 parent_node = parent_node.value
             real_target.append(parent_node.id)
             real_target.reverse()
-            assign_targets_ids.append('.'.join(real_target))
+            name_lis.append('.'.join(real_target))
         
+        elif isinstance(target, ast.Subscript):
+            res = SDEVisitor.parse_subscript_name(target)
+            if res is False:
+                return False
+            name_lis.append(res)
+
         else:
-            # 尚未支持的赋值目标类型 (如 Subscript)
+            # 尚未支持的赋值目标类型
             logger.warning("Unsupported assign target type [{}]".format(target.__class__.__name__))
+            return False
+        return True
     
+    def get_path_name_by_node(self, flag: list, node: ast.AST):
+        """根据 AST 结点生成完整函数路径名称
+
+        对于不属于函数的结点，返回空文本
+        :param flag: 辅助标记，用于确认末端是否为函数结点
+        :param node: 分析起始 AST 结点
+        """
+        if isinstance(node, (ast.Module, ast.Name)):
+            return ''
+
+        parent_node = self.parent_table[node]
+        
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            has_dot = flag[0]
+            if not flag[0]:
+                flag[0] = True
+            res = '{}{}{}'.format(self.get_path_name_by_node(flag, parent_node), node.name, '.' if has_dot else '')
+            return res
+        
+        if isinstance(node, ast.ClassDef):
+            if flag[0] is False:
+                return ''
+            return '{}{}.'.format(self.get_path_name_by_node(flag, parent_node), node.name)
+        
+        return self.get_path_name_by_node(flag, parent_node)
+
     def visit(self, root: ast.AST):
         """AST 任意类型结点的访问入口
         为所有的结点添加 visited 属性，若已访问过则跳过
@@ -140,16 +224,14 @@ class SDEVisitor(ast.NodeVisitor):
     
     def visit_FunctionDef(self, node: ast.FunctionDef):
         """AST FunctionDef 类型结点访问入口
-        更新 self.curr_func，并扫描输入参数
+        扫描输入参数
         """
-        if self.curr_class is None:
-            self.curr_func = node.name
-        else:
-            self.curr_func = '{}.{}'.format(self.curr_class, node.name)
-        
+        curr_func = self.get_path_name_by_node([False], node)
+        # -1 += 1
+
         # 清空结果
-        self.var_input_map.clear()
-        self.str_input_map.clear()
+        self.var_input_maps.append(dict())
+        self.str_input_maps.append(dict())
 
         # 扫描输入参数
         args = node.args.args
@@ -159,67 +241,88 @@ class SDEVisitor(ast.NodeVisitor):
                 continue
                 
             # 将当前参数作为关注对象，参数名称作为首个字符串类型敏感值
-            self.var_input_map[arg.arg] = set([arg.arg])
-            self.str_input_map[arg.arg] = set([arg.arg])
+            self.var_input_maps[-1][arg.arg] = set([arg.arg])
+            self.str_input_maps[-1][arg.arg] = set([arg.arg])
             
         self.generic_visit(node)
 
-        logger.debug("Current function is <{}>, with params {}".format(self.curr_func, list(self.var_input_map.keys())))
-        logger.debug("Current function var_input_map: {}".format(self.var_input_map))
-        logger.debug("Current function str_input_map: {}".format(self.str_input_map))
+        logger.debug("Current function is <{}>, with params {}".format(
+            curr_func, list(self.var_input_maps[-1].keys()))
+        )
+        logger.debug("Current function var_input_map: {}".format(self.var_input_maps[-1]))
+        logger.debug("Current function str_input_map: {}".format(self.str_input_maps[-1]))
 
         # 记录函数扫描结果
-        self.analyzed_functions[self.curr_func] = {
-            # "name": self.curr_func,
-            "input_names": list(self.var_input_map.keys()),
-            "var_input": dict((key, list(val)) for key, val in self.var_input_map.items()),
-            "str_input": dict((key, list(val)) for key, val in self.str_input_map.items()),
+        self.analyzed_functions[curr_func] = {
+            # "name": curr_func,
+            "input_names": list(self.var_input_maps[-1].keys()),
+            "var_input": dict((key, list(val)) for key, val in self.var_input_maps[-1].items()),
+            "str_input": dict((key, list(val)) for key, val in self.str_input_maps[-1].items()),
         }
+        self.var_input_maps.pop()
+        self.str_input_maps.pop()
+
+    def visit_AugAssign(self, node: ast.AugAssign):
+        """AST AugAssign 类型结点访问入口
+        暂时按照与普通赋值语句相同的方式处理
+        """
+        node.targets = [node.target]
+        self.visit_Assign(node)
+        del node.targets
 
     def visit_Assign(self, node: ast.Assign):
         """AST Assign 类型结点访问入口
         """
 
         # 若当前不存在与输入相关的变量，则跳过分析
-        if len(self.var_input_map) < 1:
+        if len(self.var_input_maps[-1]) < 1:
             return
         
-        assign_targets_ids = list()
-        if isinstance(node.value, ast.Tuple):
-            # 对于赋值目标为 Tuple 的情形，拆分处理
-            for i in range(0, len(node.value.dims)):
-                self.related_input_name = None
-                target = node.targets[0].dims[i]
-                self.parse_assign_targets(target, assign_targets_ids)
-
-                self.visit(target)
-
-                if self.related_input_name and len(assign_targets_ids) > 0:
-                    logger.debug("Assign targets {} may related to input '{}'".format(assign_targets_ids, self.related_input_name))
-                    self.var_input_map[self.related_input_name] |= set(assign_targets_ids)
-        else:
-            # 对于单一赋值目标，直接处理
+        # 辅助访问函数
+        def _visit(target_node: ast.AST):
             self.related_input_name = None
-            for target in node.targets:
-                self.parse_assign_targets(target, assign_targets_ids)
-
-            self.visit(node.value)
-
+            self.visit(target_node)
             if self.related_input_name and len(assign_targets_ids) > 0:
                 logger.debug("Assign targets {} may related to input '{}'".format(assign_targets_ids, self.related_input_name))
-                self.var_input_map[self.related_input_name] |= set(assign_targets_ids)
+                self.var_input_maps[-1][self.related_input_name] |= set(assign_targets_ids)
 
+        assign_targets_ids = list()
+
+        # 判断赋值目标类型
+        for target in node.targets:
+            if isinstance(target, (ast.Name, ast.Subscript, ast.Attribute)):
+                self.parse_local_name(target, assign_targets_ids)
+            elif isinstance(target, ast.Tuple):
+                if not hasattr(target, 'elts'):
+                    raise RuntimeError("Tuple target does not have attribute 'elts' (line {})".format(target.lineno))
+                for i in range(0, len(target.elts)):
+                    dim = target.elts[i]
+                    self.parse_local_name(dim, assign_targets_ids)
+            else:
+                logger.error("Unsupported assign target type: {}".format(target.__class__.__name__))
+        
+        # 判断赋值来源类型
+        value = node.value
+        if isinstance(value, ast.Tuple):
+            if not hasattr(value, 'elts'):
+                raise RuntimeError("Tuple value does not have attribute 'elts' (line {})".format(value.lineno))
+            for i in range(0, len(value.elts)):
+                dim = value.elts[i]
+                _visit(dim)
+        else:
+            _visit(value)
+        
     def visit_Name(self, node: ast.Name):
         """AST Name 类型结点访问入口
         """
 
         # 若当前不存在与输入相关的变量，则跳过分析
-        if len(self.var_input_map) < 1:
+        if len(self.var_input_maps[-1]) < 1:
             return
         
         # 判断当前 Name 结点的 id 是否出现在输入参数中
         # 若存在则更新 self.related_input_name 标记
-        for ipt_name, var_names in self.var_input_map.items():
+        for ipt_name, var_names in self.var_input_maps[-1].items():
             if node.id in var_names:
                 self.related_input_name = ipt_name
                 return
@@ -234,7 +337,7 @@ class SDEVisitor(ast.NodeVisitor):
         self.related_input_name = None
         if hasattr(node.func, 'value') and isinstance(node.func.value, ast.Name):
             func_value_name = node.func.value.id
-            for ipt_name, var_names in self.var_input_map.items():
+            for ipt_name, var_names in self.var_input_maps[-1].items():
                 if func_value_name in var_names:
                     self.related_input_name = ipt_name
         self.related_str_constant = None
@@ -242,7 +345,7 @@ class SDEVisitor(ast.NodeVisitor):
 
         if self.related_str_constant and self.related_input_name:
             logger.debug("   call: str constant '{}' related to input '{}'".format(self.related_str_constant, self.related_input_name))
-            self.str_input_map[self.related_input_name].add(self.related_str_constant)
+            self.str_input_maps[-1][self.related_input_name].add(self.related_str_constant)
 
         self.in_call = False
 
@@ -259,7 +362,7 @@ class SDEVisitor(ast.NodeVisitor):
 
         if self.related_str_constant and self.related_input_name:
             logger.debug("compare: str constant '{}' related to input '{}'".format(self.related_str_constant, self.related_input_name))
-            self.str_input_map[self.related_input_name].add(self.related_str_constant)
+            self.str_input_maps[-1][self.related_input_name].add(self.related_str_constant)
 
         self.in_compare = False
 
@@ -270,7 +373,7 @@ class SDEVisitor(ast.NodeVisitor):
         """
 
         # 若当前不存在与输入相关的变量，则跳过分析
-        if len(self.var_input_map) < 1:
+        if len(self.var_input_maps[-1]) < 1:
             return
         
         # 忽略非字符串常量

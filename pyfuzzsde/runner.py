@@ -27,16 +27,19 @@ from pyfuzzsde.ast_visitor import LineVisitor, SDEVisitor
 from pyfuzzsde import SDELogger, logger
 
 class SDERunner(object):
-    def __init__(self, entry_func=None, trace_native_libs=False, ignore_filenames=None, verbose=False):
+    def __init__(self, entry_func=None, trace_native_libs=False, black_filenames=None, white_filenames=None, verbose=False, max_len=4096):
         """初始化 SDERunner
 
         :param target: 待执行的函数，若要执行文件，无需传入该参数，调用 load 方法即可
         :param trace_native_libs: 是否跟踪内部库，默认为 False
-        :param ignore_filenames: 忽略的文件路径关键词列表，默认为 None
+        :param black_filenames: 文件路径关键词黑名单列表，默认为 None
+        :param white_filenames: 文件路径关键词白名单列表 (优先于黑名单)，默认为 None
+        :param max_len: 单个测试用例的最大长度，默认为 4096
         :return:
         """
 
         self.quitting = False
+        self.max_len = max_len
         self.entry_path = None
         self.entry_compiled = None
         self.entry_dir = None
@@ -61,7 +64,7 @@ class SDERunner(object):
         self.used_data_pool = list()
         
         # 额外的 tracer (用于覆盖率或调试器)
-        self.cov = coverage.Coverage(branch=True)
+        self.cov = coverage.Coverage(branch=True, cover_pylib=True)
         self.tracer_cov = None
         self.tracer_debugger = None
 
@@ -76,13 +79,18 @@ class SDERunner(object):
         if verbose:
             SDELogger.enable_debug()
 
-        # 准备文件路径排除列表
-        self.ignore_fns = []
+        # 准备关键词列表
+        self.black_fns = []
         if not trace_native_libs:
-            self.ignore_fns.extend(['site-packages', 'lib/python'])
-        if ignore_filenames:
-            self.ignore_fns.extend(ignore_filenames)
-        logger.info("ignore_filenames set to {}".format(self.ignore_fns))
+            self.black_fns.extend(['site-packages', 'lib/python'])
+        if black_filenames:
+            self.black_fns.extend(black_filenames)
+        logger.info("black_fns set to {}".format(self.black_fns))
+
+        self.white_fns = [self.entry_path]
+        if white_filenames:
+            self.white_fns.extend(white_filenames)
+        logger.info("white_fns set to {}".format(self.white_fns))
     
     def set_entry_dir(self, entry_dir):
         self.entry_dir = os.path.abspath(entry_dir)
@@ -153,15 +161,27 @@ class SDERunner(object):
         # 忽略不在 self.entry_dir 文件夹中的文件
         if self.entry_dir not in frame.f_code.co_filename:
             return self.trace_dispatch
-        for fn in self.ignore_fns:
+        
+        is_white = False
+        for fn in self.white_fns:
             if fn in frame.f_code.co_filename:
-                return self.trace_dispatch
+                is_white = True
+                break
+        
+        if not is_white:
+            for fn in self.black_fns:
+                if fn in frame.f_code.co_filename:
+                    return self.trace_dispatch
         
         if self.tracer_cov:
             # 执行覆盖率统计 tracer
             res = self.tracer_cov(frame, event, arg)
+            level = 0
+            max_level = 100
             sys.settrace(self.trace_dispatch)
             while res is not None and res != self.tracer_cov:
+                level += 1
+                assert level < max_level
                 res = res(frame, event, arg)
                 sys.settrace(self.trace_dispatch)
 
@@ -172,7 +192,7 @@ class SDERunner(object):
         if frame.f_code.co_filename != self.curr_filename:
             self.curr_filename = frame.f_code.co_filename
             self.curr_code, self.curr_ast, self.curr_sde_visitor = self.load_code(self.curr_filename)
-            logger.info("Switch to source code file [{}]".format(self.curr_filename))
+            logger.debug("Switch to source code file [{}]".format(self.curr_filename))
 
         # 根据 event 类型分发处理
         if event == 'line':
@@ -183,36 +203,10 @@ class SDERunner(object):
             self.curr_watch_vars.clear()
 
         return self.trace_dispatch
-    
-    def get_path_name_by_node(self, flag: list, node: ast.AST):
-        """根据 AST 结点生成完整函数路径名称
-
-        对于不属于函数的结点，返回空文本
-        :param flag: 辅助标记，用于确认末端是否为函数结点
-        :param node: 分析起始 AST 结点
-        """
-        if isinstance(node, (ast.Module, ast.Name)):
-            return ''
-
-        parent_node = self.curr_sde_visitor.parent_table[node]
-        
-        if isinstance(parent_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            has_dot = flag[0]
-            if not flag[0]:
-                flag[0] = True
-            res = '{}{}{}'.format(self.get_path_name_by_node(flag, parent_node), parent_node.name, '.' if has_dot else '')
-            return res
-        
-        if isinstance(parent_node, ast.ClassDef):
-            if flag[0] is False:
-                return ''
-            return '{}{}.'.format(self.get_path_name_by_node(flag, parent_node), parent_node.name)
-        
-        return self.get_path_name_by_node(flag, parent_node)
 
     def get_curr_func_name(self):
         line_node = self.curr_ast.line_node[self.curr_lineno]
-        func_name = self.get_path_name_by_node([False], line_node)
+        func_name = self.curr_sde_visitor.get_path_name_by_node([False], line_node)
         return func_name
 
     def dispatch_line(self, frame: FrameType):
@@ -232,12 +226,15 @@ class SDERunner(object):
             try:
                 obj = frame.f_locals[name_split[0]]
                 val = eval("obj.{}".format('.'.join(name_split[1:]))) if len(name_split) > 1 else obj
-                if isinstance(val, str) and val not in self.data_pool and val not in self.used_data_pool:
-                    logger.info("New str DETECTED during running: ({}:{}) {} = {}".format(
-                        self.curr_filename, self.curr_lineno, var_name, val
-                    ))
-                    self.data_pool.append(val)
-            except KeyError:
+                if isinstance(val, str) and \
+                    val not in self.data_pool and \
+                    val not in self.used_data_pool and \
+                    len(val) < self.max_len:
+                        logger.info("New str DETECTED during running: ({}:{}) {} = {}".format(
+                            self.curr_filename, self.curr_lineno, var_name, val
+                        ))
+                        self.data_pool.append(val)
+            except (KeyError, NameError, AttributeError):
                 pass
         
         # 获取当前完整函数名称
@@ -392,12 +389,13 @@ class SDERunner(object):
             if not self.quitting:
                 self.used_data_pool.append(selected_ipt)
             else:
-                logger.error("Input data [{}] caused a crash!".format(selected_ipt))
+                logger.error("Input data \033[1;33m{}\033[0m caused a crash!".format(selected_ipt))
             cnt += 1
         
         self.cov.stop()
         self.cov.save()
-        self.cov.report()
+        # logger.info("Generating Coverage report")
+        # self.cov.report()
 
         sys.settrace(self.tracer_debugger)
         threading.settrace(self.tracer_debugger)

@@ -1,0 +1,6 @@
+[submodule "benchmarks/requests-1/requests"]
+	path = benchmarks/requests-1/requests
+	url = https://github.com.cnpmjs.org/psf/requests
+[submodule "benchmarks/sympy-1/sympy"]
+	path = benchmarks/sympy-1/sympy
+	url = /home/zsx/pythonTest/realProjects/sympy-1
