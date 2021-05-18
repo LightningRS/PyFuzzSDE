@@ -3,4 +3,4 @@
 	url = https://github.com.cnpmjs.org/psf/requests
 [submodule "benchmarks/sympy-1/sympy"]
 	path = benchmarks/sympy-1/sympy
-	url = /home/zsx/pythonTest/realProjects/sympy-1
+	url = https://github.com.cnpmjs.org/sympy/sympy
