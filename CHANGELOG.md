@@ -1,5 +1,11 @@
 # PyFuzzSDE 更新日志
 
+## V0.0.5: 2021-05-21
+- benchmarks: 进一步规范 benchmarks 结构，确定子模块版本
+- benchmarks: 根据 Python-AFL 相关文档的说明改用 os._exit(0) 方法退出，提升执行效率
+- benchmarks: 调整 benchmarks 命名规则，奇数编号为存在 bug 的历史版本，偶数编号为最新的 release 版本
+- benchmarks: 优化 SDE 测试用例收集过程，去除了空用例和包含不可打印字符 (printable) 的用例
+
 ## V0.0.4: 2021-05-18
 - runner: 调整参数名称，引入黑白名单机制，更好地支持筛选需要跟踪的内部库文件
 - runner: 由于部分情况下 Coverage 库报告耗时过长，因此将 report 语句暂时移出

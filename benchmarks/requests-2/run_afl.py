@@ -1,17 +1,15 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 # @Project: PyFuzzSDE
-# @File:    pyfuzzsde/benchmarks/requests-1/run_afl.py
-# @Time:    2021/04/28 02:45:00
+# @File:    pyfuzzsde/benchmarks/requests-2/run_afl.py
+# @Time:    2021/05/18 16:00:00
 # @Version: 0.0.5
 # @Author:  LightningRS
 # @Email:   me@ldby.site
-# @Desc:    PyFuzzSDE Real Project Benchmark (requests-1) AFL Adapter
-# @BugAt:   https://github.com/psf/requests/commit/3bb13f8fbb9d4ed1a20bd33495cdc087eb062ca0
-# @Fixed:   https://github.com/psf/requests/commit/961790f95c7c06dc073d882acb28810a22d27b77
+# @Desc:    PyFuzzSDE Real Project Benchmark (requests-2) AFL Adapter
+# @Ref:     https://github.com/psf/requests/commit/c2b307dbefe21177af03f9feb37181a89a799fcc
 # @Changelog:
-#    2021/05/18: Improve performance
-#    2021/04/28: Create benchmark
+#    2021/05/18: Create benchmark
 
 import afl
 import os

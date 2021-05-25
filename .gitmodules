@@ -1,6 +1,18 @@
 [submodule "benchmarks/requests-1/requests"]
 	path = benchmarks/requests-1/requests
 	url = https://github.com.cnpmjs.org/psf/requests
+[submodule "benchmarks/requests-2/requests"]
+	path = benchmarks/requests-2/requests
+	url = https://github.com.cnpmjs.org/psf/requests
+[submodule "benchmarks/requests-3/requests"]
+	path = benchmarks/requests-3/requests
+	url = https://github.com.cnpmjs.org/psf/requests
+[submodule "benchmarks/requests-4/requests"]
+	path = benchmarks/requests-4/requests
+	url = https://github.com.cnpmjs.org/psf/requests
 [submodule "benchmarks/sympy-1/sympy"]
 	path = benchmarks/sympy-1/sympy
+	url = https://github.com.cnpmjs.org/sympy/sympy
+[submodule "benchmarks/sympy-2/sympy"]
+	path = benchmarks/sympy-2/sympy
 	url = https://github.com.cnpmjs.org/sympy/sympy

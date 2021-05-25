@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 # @Project: PyFuzzSDE
 # @File:    pyfuzzsde/benchmarks/handmade-1/run_afl.py
-# @Time:    2021/05/18 16:00:00
-# @Version: 0.0.4
+# @Time:    2021/05/20 16:00:00
+# @Version: 0.0.5
 # @Author:  LightningRS
 # @Email:   me@ldby.site
 # @Desc:    PyFuzzSDE Handmade Benchmark 01 AFL Adapter
 # @Changelog:
+#    2021/05/20: Improve performance
 #    2021/05/18: Create benchmark
 
 import afl
@@ -19,13 +20,10 @@ sys.path.append(base_path)
 
 from handmade1 import handmade_1
 
-def handmade_1_sde(one_input):
-    try:
-        ipt_data = str(one_input)
-    except UnicodeDecodeError:
-        sys.exit(0)
-    handmade_1(one_input)
-
-if __name__ == '__main__':
-    afl.init()
-    handmade_1_sde()
+afl.init()
+try:
+    ipt_data = str(one_input)
+except UnicodeDecodeError:
+    os._exit(0)
+handmade_1(one_input)
+os._exit(0)

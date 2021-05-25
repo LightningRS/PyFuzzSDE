@@ -47,8 +47,9 @@ if __name__ == "__main__":
     f_dict = open('./output/handmade-1.dict', 'w')
     for i in range(len(final_pool)):
         src: str = final_pool[i]
-        trans = src.replace('\\', '\\\\').replace('"', '\\"')
+        trans = src.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '')
         with open(os.path.join(all_input, 'input{}.txt'.format(i)), "w") as f:
             f.write(src)
-        f_dict.write('input{}="{}"\n'.format(i, trans))
+        if len(trans) > 0 and trans.isprintable():
+            f_dict.write('input{}="{}"\n'.format(i, trans))
     f_dict.close()
